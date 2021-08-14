@@ -252,7 +252,7 @@ impl SmtpConnection {
     }
 
     /// Writes a string to the server
-    fn write(&mut self, string: &[u8]) -> Result<(), Error> {
+    pub fn write(&mut self, string: &[u8]) -> Result<(), Error> {
         self.stream
             .get_mut()
             .write_all(string)
