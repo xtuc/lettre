@@ -57,7 +57,6 @@ impl SmtpConnection {
     pub fn connect<A: ToSocketAddrs>(
         server: A,
         timeout: Option<Duration>,
-        hello_name: &ClientId,
         tls_parameters: Option<&TlsParameters>,
     ) -> Result<SmtpConnection, Error> {
         let stream = NetworkStream::connect(server, timeout, tls_parameters)?;
@@ -70,9 +69,7 @@ impl SmtpConnection {
         conn.set_timeout(timeout).map_err(error::network)?;
         // TODO log
         let _response = conn.read_response()?;
-
-        conn.ehlo(hello_name)?;
-
+        
         // Print server information
         #[cfg(feature = "tracing")]
         tracing::debug!("server {}", conn.server_info);
