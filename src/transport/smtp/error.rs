@@ -154,10 +154,18 @@ impl StdError for Error {
     }
 }
 
-pub(crate) fn code(c: Code) -> Error {
+pub(crate) fn _code(c: Code) -> Error {
     match c.severity {
         Severity::TransientNegativeCompletion => Error::new::<Error>(Kind::Transient(c), None),
         Severity::PermanentNegativeCompletion => Error::new::<Error>(Kind::Permanent(c), None),
+        _ => client("Unknown error code"),
+    }
+}
+
+pub(crate) fn code_with_text<E: Into<BoxError>>(c: Code, e: E) -> Error {
+    match c.severity {
+        Severity::TransientNegativeCompletion => Error::new::<E>(Kind::Transient(c), Some(e)),
+        Severity::PermanentNegativeCompletion => Error::new::<E>(Kind::Permanent(c), Some(e)),
         _ => client("Unknown error code"),
     }
 }

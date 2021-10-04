@@ -70,15 +70,15 @@ impl SmtpConnection {
         conn.set_timeout(timeout).map_err(error::network)?;
         // TODO log
         let _response = conn.read_response()?;
-        
+
         conn.ehlo(hello_name)?;
-        
+
         // Print server information
         #[cfg(feature = "tracing")]
         tracing::debug!("server {}", conn.server_info);
         Ok(conn)
     }
-     
+
     /// connects
     pub fn connect_no_hello<A: ToSocketAddrs>(
         server: A,
@@ -95,7 +95,7 @@ impl SmtpConnection {
         conn.set_timeout(timeout).map_err(error::network)?;
         // TODO log
         let _response = conn.read_response()?;
-        
+
         // Print server information
         #[cfg(feature = "tracing")]
         tracing::debug!("server {}", conn.server_info);
@@ -299,7 +299,8 @@ impl SmtpConnection {
                     return if response.is_positive() {
                         Ok(response)
                     } else {
-                        Err(error::code(response.code()))
+                        let text = response.message().collect::<Vec<&str>>().join("\\n");
+                        Err(error::code_with_text(response.code(), text))
                     };
                 }
                 Err(nom::Err::Failure(e)) => {
