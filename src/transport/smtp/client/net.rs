@@ -1,7 +1,7 @@
 use std::{
     io::{self, Read, Write},
     mem,
-    net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
     time::Duration,
 };
 
@@ -27,13 +27,13 @@ pub struct NetworkStream {
 #[allow(clippy::large_enum_variant)]
 enum InnerNetworkStream {
     /// Plain TCP stream
-    Tcp(TcpStream),
+    Tcp(socket2::Socket),
     /// Encrypted TCP stream
     #[cfg(feature = "native-tls")]
-    NativeTls(TlsStream<TcpStream>),
+    NativeTls(TlsStream<socket2::Socket>),
     /// Encrypted TCP stream
     #[cfg(feature = "rustls-tls")]
-    RustlsTls(StreamOwned<ClientSession, TcpStream>),
+    RustlsTls(StreamOwned<ClientSession, socket2::Socket>),
     /// Can't be built
     None,
 }
@@ -48,7 +48,7 @@ impl NetworkStream {
     }
 
     /// Returns peer's address
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+    pub fn peer_addr(&self) -> io::Result<socket2::SockAddr> {
         match self.inner {
             InnerNetworkStream::Tcp(ref s) => s.peer_addr(),
             #[cfg(feature = "native-tls")]
@@ -57,10 +57,7 @@ impl NetworkStream {
             InnerNetworkStream::RustlsTls(ref s) => s.get_ref().peer_addr(),
             InnerNetworkStream::None => {
                 debug_assert!(false, "InnerNetworkStream::None must never be built");
-                Ok(SocketAddr::V4(SocketAddrV4::new(
-                    Ipv4Addr::new(127, 0, 0, 1),
-                    80,
-                )))
+                Ok(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 80)).into())
             }
         }
     }
@@ -88,14 +85,28 @@ impl NetworkStream {
         fn try_connect_timeout<T: ToSocketAddrs>(
             server: T,
             timeout: Duration,
-        ) -> Result<TcpStream, Error> {
+        ) -> Result<socket2::Socket, Error> {
             let addrs = server.to_socket_addrs().map_err(error::connection)?;
 
             let mut last_err = None;
 
             for addr in addrs {
-                match TcpStream::connect_timeout(&addr, timeout) {
-                    Ok(stream) => return Ok(stream),
+                let domain = if addr.is_ipv4() {
+                    socket2::Domain::IPV4
+                } else {
+                    socket2::Domain::IPV6
+                };
+                let socket = socket2::Socket::new(
+                    domain,
+                    socket2::Type::STREAM,
+                    Some(socket2::Protocol::TCP),
+                )
+                .map_err(error::connection)?;
+                match socket
+                    .connect_timeout(&addr.into(), timeout)
+                    .map_err(error::connection)
+                {
+                    Ok(_) => return Ok(socket),
                     Err(err) => last_err = Some(err),
                 }
             }
@@ -108,7 +119,10 @@ impl NetworkStream {
 
         let tcp_stream = match timeout {
             Some(t) => try_connect_timeout(server, t)?,
-            None => TcpStream::connect(server).map_err(error::connection)?,
+            None => {
+                // TcpStream::connect(server).map_err(error::connection)?,
+                todo!() // switch to socket2
+            }
         };
 
         let mut stream = NetworkStream::new(InnerNetworkStream::Tcp(tcp_stream));
@@ -116,6 +130,30 @@ impl NetworkStream {
             stream.upgrade_tls(tls_parameters)?;
         }
         Ok(stream)
+    }
+
+    pub fn bind(&self, ip_addr: IpAddr) -> Result<(), Error> {
+        let port = 0; // let the kernel assign a enphemeral port
+        let addr: socket2::SockAddr = match ip_addr {
+            IpAddr::V4(v4) => SocketAddrV4::new(v4, port).into(),
+            IpAddr::V6(v6) => SocketAddrV6::new(v6, port, 0, 0).into(),
+        };
+
+        match self.inner {
+            InnerNetworkStream::Tcp(ref stream) => stream.bind(&addr).map_err(error::connection),
+            #[cfg(feature = "native-tls")]
+            InnerNetworkStream::NativeTls(ref stream) => {
+                stream.get_ref().bind(&addr).map_err(error::connection)
+            }
+            #[cfg(feature = "rustls-tls")]
+            InnerNetworkStream::RustlsTls(ref stream) => {
+                stream.get_ref().bind(&addr).map_err(error::connection)
+            }
+            InnerNetworkStream::None => {
+                debug_assert!(false, "InnerNetworkStream::None must never be built");
+                Ok(())
+            }
+        }
     }
 
     pub fn upgrade_tls(&mut self, tls_parameters: &TlsParameters) -> Result<(), Error> {
@@ -144,7 +182,7 @@ impl NetworkStream {
 
     #[cfg(any(feature = "native-tls", feature = "rustls-tls"))]
     fn upgrade_tls_impl(
-        tcp_stream: TcpStream,
+        tcp_stream: socket2::Socket,
         tls_parameters: &TlsParameters,
     ) -> Result<InnerNetworkStream, Error> {
         Ok(match &tls_parameters.connector {

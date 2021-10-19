@@ -1,7 +1,7 @@
 use std::{
     fmt::Display,
     io::{self, BufRead, BufReader, Write},
-    net::ToSocketAddrs,
+    net::{IpAddr, ToSocketAddrs},
     time::Duration,
 };
 
@@ -84,8 +84,12 @@ impl SmtpConnection {
         server: A,
         timeout: Option<Duration>,
         tls_parameters: Option<&TlsParameters>,
+        bind_to: Option<IpAddr>,
     ) -> Result<SmtpConnection, Error> {
         let stream = NetworkStream::connect(server, timeout, tls_parameters)?;
+        if let Some(bind_to) = bind_to {
+            stream.bind(bind_to).map_err(error::network)?;
+        }
         let stream = BufReader::new(stream);
         let mut conn = SmtpConnection {
             stream,
